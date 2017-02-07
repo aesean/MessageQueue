@@ -1,0 +1,127 @@
+
+import java.util.Random;
+import java.util.Stack;
+
+import static java.lang.System.currentTimeMillis;
+
+/**
+ * MessageQueue
+ *
+ * @author xl
+ * @version V1.0
+ * @since 07/02/2017
+ */
+public class MessageQueue {
+    private static final Random sRandom = new Random();
+    private static final Stack<Runnable> sTaskStack = new Stack<>();
+
+    private static volatile boolean sFinishHeartbeatThread = false;
+    private static final long HEARTBEAT_INTERVAL = 1000;
+    private static final long HEARTBEAT_TIMEOUT = 5000;
+
+    public static void main(String[] args) {
+        createTask(3);
+        createTask(4);
+        createTask(5);
+        createTask(6);
+
+        createHeartbeatThread();
+        long start = currentTimeMillis();
+        int count = 0;
+        long wake;
+        Runnable runnable = null;
+        while (true) {
+            if (runnable != null) {
+                runnable.run();
+                runnable = null;
+                count++;
+                start = currentTimeMillis();
+            }
+            synchronized (sTaskStack) {
+                try {
+                    if (!sTaskStack.empty()) {
+                        runnable = sTaskStack.pop();
+                        continue;
+                    }
+                    sTaskStack.wait();
+                    if (!sTaskStack.empty()) {
+                        runnable = sTaskStack.pop();
+                        continue;
+                    }
+                    wake = currentTimeMillis();
+                    //noinspection ConstantConditions
+                    if (wake - start > HEARTBEAT_TIMEOUT && HEARTBEAT_TIMEOUT != -1) {
+                        sFinishHeartbeatThread = true;
+                        break;
+                    }
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+
+        }
+        System.out.println("超时结束，一共处理任务个数：" + count);
+    }
+
+    /**
+     * 可在任意线程调用，Runnable最终将被主线程执行
+     *
+     * @param runnable 需要执行的runnable
+     */
+    private static void runOnMainThread(Runnable runnable) {
+        if (runnable == null) {
+            throw new NullPointerException("runnable can not be null. ");
+        }
+        synchronized (sTaskStack) {
+            sTaskStack.notify();
+            sTaskStack.push(runnable);
+        }
+    }
+
+    private static void createHeartbeatThread() {
+        new Thread(new Runnable() {
+            private int mCount = 0;
+
+            @Override
+            public void run() {
+                long start = System.currentTimeMillis();
+                while (!sFinishHeartbeatThread) {
+                    synchronized (sTaskStack) {
+                        sTaskStack.notify();
+                    }
+                    mCount++;
+                    long millis = System.currentTimeMillis();
+                    try {
+                        Thread.sleep(start + HEARTBEAT_INTERVAL * mCount - millis);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }).start();
+    }
+
+    private static void createTask(final int count) {
+        new Thread(() -> {
+            for (int i = 0; i < count; i++) {
+                runOnMainThread(createTaskRunnable());
+                try {
+                    Thread.sleep(500 + sRandom.nextInt(1500));
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }).start();
+    }
+
+    private static Runnable createTaskRunnable() {
+        final long msg = Thread.currentThread().getId();
+        return new Runnable() {
+            @Override
+            public void run() {
+                System.out.println("创建任务的线程为" + msg + "，当前执行线程为" + Thread.currentThread().getId()
+                        + "。(" + this.hashCode() + ")");
+            }
+        };
+    }
+}
